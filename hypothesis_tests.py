@@ -127,7 +127,7 @@ def ttest_paired(sample1: Union[List[float], np.ndarray, DataSet],
     def _extract(d, col):
         if isinstance(d, DataSet):
             ci = col if col is not None else 0
-            return d.data[:, ci].astype(float, errors="ignore") if d._is_matrix else d.data.astype(float, errors="ignore")
+            return d.get_raw_column(ci)
         return np.asarray(d, dtype=float)
 
     x_raw = _extract(sample1, col1)
@@ -248,7 +248,7 @@ def wilcoxon_signed_rank(sample1: Union[List[float], np.ndarray, DataSet],
     def _extract(d, col):
         if isinstance(d, DataSet):
             ci = col if col is not None else 0
-            return d.data[:, ci].astype(float, errors="ignore") if d._is_matrix else d.data.astype(float, errors="ignore")
+            return d.get_raw_column(ci)
         return np.asarray(d, dtype=float)
 
     x_raw = _extract(sample1, col1)
@@ -375,10 +375,10 @@ def correlation_test(data: Union[List[List[float]], np.ndarray, DataSet],
                      col_indices: Optional[List[int]] = None) -> Dict[str, Any]:
     if isinstance(data, DataSet):
         if col_indices is not None:
-            raw_cols = [data.data[:, i].astype(float, errors="ignore") if data._is_matrix else data.data.astype(float, errors="ignore") for i in col_indices]
+            raw_cols = [data.get_raw_column(i) for i in col_indices]
             col_names = [data.column_names[i] for i in col_indices]
         else:
-            raw_cols = [data.data[:, i].astype(float, errors="ignore") if data._is_matrix else data.data.astype(float, errors="ignore") for i in range(data.n_cols)]
+            raw_cols = [data.get_raw_column(i) for i in range(data.n_cols)]
             col_names = data.column_names
     else:
         mat = np.asarray(data, dtype=float)

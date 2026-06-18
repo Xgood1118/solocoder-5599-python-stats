@@ -104,7 +104,7 @@ def correlation_matrix(
     if isinstance(data, DataSet):
         columns = [data.get_clean_column(i) for i in range(data.n_cols)]
         column_names = data.column_names
-        raw_cols = [data.data[:, i].astype(float, errors="ignore") if data._is_matrix else data.data.astype(float, errors="ignore") for i in range(data.n_cols)]
+        raw_cols = [data.get_raw_column(i) for i in range(data.n_cols)]
     else:
         mat = np.asarray(data, dtype=float)
         if mat.ndim == 1:
@@ -145,7 +145,7 @@ def covariance_matrix(
     ddof: int = 1
 ) -> Dict[str, Any]:
     if isinstance(data, DataSet):
-        raw_cols = [data.data[:, i].astype(float, errors="ignore") if data._is_matrix else data.data.astype(float, errors="ignore") for i in range(data.n_cols)]
+        raw_cols = [data.get_raw_column(i) for i in range(data.n_cols)]
         column_names = data.column_names
     else:
         mat = np.asarray(data, dtype=float)

@@ -1,6 +1,7 @@
 import os
 import json
 import traceback
+import numpy as np
 from flask import Flask, request, jsonify
 
 from models import DataSet
@@ -14,6 +15,28 @@ app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
 
 _LOADED_MODELS: dict = {}
+
+
+def _parse_data(body, key="data"):
+    raw = body[key]
+    col_names = body.get("column_names")
+    units = body.get("units")
+    if isinstance(raw, dict) and "data" in raw:
+        return DataSet(raw["data"], raw.get("column_names"), units=raw.get("units"))
+    if isinstance(raw, list) and len(raw) > 0 and isinstance(raw[0], list):
+        return DataSet(raw, col_names, units=units)
+    return raw
+
+
+def _parse_data_col(body, key="data"):
+    raw = body[key]
+    col_names = body.get("column_names")
+    col_idx = body.get("column_idx", 0)
+    if isinstance(raw, dict) and "data" in raw:
+        return DataSet(raw["data"], raw.get("column_names")), col_idx
+    if isinstance(raw, list) and len(raw) > 0 and isinstance(raw[0], list):
+        return DataSet(raw, col_names), col_idx
+    return raw, col_idx
 
 
 def _json_response(data, status=200):
@@ -114,18 +137,41 @@ def create_dataset():
         return _error_response(str(e), 400, traceback.format_exc())
 
 
+@app.route("/api/datasets/info", methods=["POST"])
+def dataset_info():
+    try:
+        body = request.get_json(force=True)
+        ds = DataSet(
+            data=body["data"],
+            column_names=body.get("column_names"),
+            units=body.get("units"),
+            missing_value_marker=body.get("missing_value_marker", float("nan")),
+            name=body.get("name"),
+        )
+        col_details = {}
+        for i, cn in enumerate(ds.column_names):
+            raw = ds.get_raw_column(i)
+            nan_count = int(np.isnan(raw).sum())
+            col_details[cn] = {
+                "index": i,
+                "n_rows": ds.n_rows,
+                "valid_count": ds.n_rows - nan_count,
+                "missing_count": nan_count,
+                "unit": ds.units.get(cn),
+            }
+        return _json_response({
+            "dataset": ds.to_dict(),
+            "columns": col_details,
+        })
+    except Exception as e:
+        return _error_response(str(e), 400, traceback.format_exc())
+
+
 @app.route("/api/stats/univariate", methods=["POST"])
 def univariate():
     try:
         body = request.get_json(force=True)
-        data = body["data"]
-        ds = None
-        if isinstance(data, dict) and "data" in data:
-            ds = DataSet(data["data"], data.get("column_names"))
-            col_idx = body.get("column_idx", 0)
-        else:
-            col_idx = body.get("column_idx", 0)
-            ds = data
+        ds, col_idx = _parse_data_col(body)
         result = sc.descriptive_univariate(
             ds,
             ddof=body.get("ddof", 0),
@@ -141,12 +187,7 @@ def univariate():
 def correlation():
     try:
         body = request.get_json(force=True)
-        data = body["data"]
-        ds = None
-        if isinstance(data, dict) and "data" in data:
-            ds = DataSet(data["data"], data.get("column_names"))
-        else:
-            ds = data
+        ds = _parse_data(body)
         method = body.get("method", "pearson")
         return _json_response(sc.correlation_matrix(ds, method=method))
     except Exception as e:
@@ -157,12 +198,7 @@ def correlation():
 def covariance():
     try:
         body = request.get_json(force=True)
-        data = body["data"]
-        ds = None
-        if isinstance(data, dict) and "data" in data:
-            ds = DataSet(data["data"], data.get("column_names"))
-        else:
-            ds = data
+        ds = _parse_data(body)
         return _json_response(sc.covariance_matrix(ds, ddof=body.get("ddof", 1)))
     except Exception as e:
         return _error_response(str(e), 400, traceback.format_exc())
@@ -172,12 +208,7 @@ def covariance():
 def summary():
     try:
         body = request.get_json(force=True)
-        data = body["data"]
-        ds = None
-        if isinstance(data, dict) and "data" in data:
-            ds = DataSet(data["data"], data.get("column_names"))
-        else:
-            ds = data
+        ds = _parse_data(body)
         return _json_response(sc.summary_stats(ds, ddof=body.get("ddof", 0), quantiles=body.get("quantiles")))
     except Exception as e:
         return _error_response(str(e), 400, traceback.format_exc())
@@ -195,15 +226,8 @@ def dist_catalog():
 def dist_fit():
     try:
         body = request.get_json(force=True)
-        data = body["data"]
+        ds, col_idx = _parse_data_col(body)
         dist_name = body["distribution"]
-        ds = None
-        if isinstance(data, dict) and "data" in data:
-            ds = DataSet(data["data"], data.get("column_names"))
-            col_idx = body.get("column_idx", 0)
-        else:
-            ds = data
-            col_idx = body.get("column_idx", 0)
         fitted = dist.fit_distribution(ds, dist_name, column_idx=col_idx)
         return _json_response(fitted.to_dict())
     except Exception as e:
@@ -214,14 +238,7 @@ def dist_fit():
 def dist_auto_fit():
     try:
         body = request.get_json(force=True)
-        data = body["data"]
-        ds = None
-        if isinstance(data, dict) and "data" in data:
-            ds = DataSet(data["data"], data.get("column_names"))
-            col_idx = body.get("column_idx", 0)
-        else:
-            ds = data
-            col_idx = body.get("column_idx", 0)
+        ds, col_idx = _parse_data_col(body)
         result = dist.auto_fit_distributions(
             ds,
             candidates=body.get("candidates"),
@@ -265,9 +282,14 @@ app.add_url_rule("/api/distributions/rvs", view_func=_dist_query(dist.distributi
 
 def _extract_sample(body, key):
     v = body[key]
+    col_names = body.get("column_names")
     if isinstance(v, dict) and "data" in v:
         col = v.get("column_idx", 0)
         ds = DataSet(v["data"], v.get("column_names"))
+        return ds, col
+    if isinstance(v, list) and len(v) > 0 and isinstance(v[0], list):
+        col = body.get("column_idx", 0)
+        ds = DataSet(v, col_names)
         return ds, col
     return v, None
 
@@ -420,12 +442,7 @@ def shapiro():
 def corr_test():
     try:
         body = request.get_json(force=True)
-        data = body["data"]
-        ds = None
-        if isinstance(data, dict) and "data" in data:
-            ds = DataSet(data["data"], data.get("column_names"))
-        else:
-            ds = data
+        ds = _parse_data(body)
         return _json_response(ht.correlation_test(
             ds,
             method=body.get("method", "pearson"),
@@ -622,12 +639,7 @@ def reg_delete(filename):
 def report_full():
     try:
         body = request.get_json(force=True)
-        data = body["data"]
-        ds = None
-        if isinstance(data, dict) and "data" in data:
-            ds = DataSet(data["data"], data.get("column_names"), units=data.get("units"))
-        else:
-            ds = data
+        ds = _parse_data(body)
         result = full_statistics_report(
             ds,
             column_idx=body.get("column_idx", 0),
